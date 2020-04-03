@@ -241,8 +241,8 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
           line = line.strip()
 
         # Empty lines are used as document delimiters
-        if not line:
-          all_documents.append([])
+        #if not line:
+        all_documents.append([])
         tokens = tokenizer.tokenize(line)
         if tokens:
           all_documents[-1].append(tokens)
