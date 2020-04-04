@@ -92,6 +92,9 @@ flags.DEFINE_float(
     "Probability of creating sequences which are shorter than the "
     "maximum length.")
 
+flags.DEFINE_integer("num_task", 1, help="Number of total tasks.")
+flags.DEFINE_integer("task", 0, help="The Task ID. This value is used when "
+                       "using multiple workers to identify each worker.")
 
 class TrainingInstance(object):
   """A single training instance (sentence pair)."""
@@ -628,6 +631,17 @@ def main(_):
   for input_pattern in FLAGS.input_file.split(","):
     input_files.extend(tf.gfile.Glob(input_pattern))
 
+  tf.logging.info("Use glob: %s", FLAGS.input_file)
+  tf.logging.info("Find %d files: %s", len(input_files), input_files)
+
+  input_files = input_files[FLAGS.task::FLAGS.num_task]
+  if not input_files:
+    tf.logging.info("Exit: task %d has no file to process.", FLAGS.task)
+    return
+
+  tf.logging.info("Task %d process %d files: %s",
+                  FLAGS.task, len(input_files), input_files)
+    
   tf.logging.info("*** Reading from input files ***")
   for input_file in input_files:
     tf.logging.info("  %s", input_file)
