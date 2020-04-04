@@ -655,6 +655,9 @@ def main(_):
   tf.logging.info("number of instances: %i", len(instances))
 
   output_files = FLAGS.output_file.split(",")
+  
+  output_files = [s + '_' + str(FLAGS.task) + '.tfrecord' for s in output_files]
+  
   tf.logging.info("*** Writing to output files ***")
   for output_file in output_files:
     tf.logging.info("  %s", output_file)
