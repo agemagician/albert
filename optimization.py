@@ -28,7 +28,7 @@ from tensorflow.contrib import tpu as contrib_tpu
 
 def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu,
                      optimizer="adamw", poly_power=1.0, start_warmup_step=0,
-                     colocate_gradients_with_ops=False):
+                     colocate_gradients_with_ops=False, hvd=None, use_fp16=False, manual_fp16=False):
   """Creates an optimizer training op."""
   global_step = tf.train.get_or_create_global_step()
 
@@ -94,16 +94,40 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu,
 
   if use_tpu:
     optimizer = contrib_tpu.CrossShardOptimizer(optimizer)
+    
+  // Change 9 add horovod optimizer
+  if hvd is not None:
+    optimizer = hvd.DistributedOptimizer(optimizer, sparse_as_dense=True, compression=Compression.fp16 if use_fp16 or manual_fp16 else Compression.none)
 
   tvars = tf.trainable_variables()
-  grads = tf.gradients(
-      loss, tvars, colocate_gradients_with_ops=colocate_gradients_with_ops)
+  # grads = tf.gradients(
+  #    loss, tvars, colocate_gradients_with_ops=colocate_gradients_with_ops)
+  // Change 10 calculate gradients with horovod
+  grads_and_vars = optimizer.compute_gradients(loss, tvars)
+
+  # # This is how the model was pre-trained.
+  #(grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
+  // Change 11 clip grads
+  grads_and_vars = [(g, v) for g, v in grads_and_vars if g is not None]
+      grads, tvars = list(zip(*grads_and_vars))
+      all_are_finite = tf.reduce_all(
+          [tf.reduce_all(tf.is_finite(g)) for g in grads]) if use_fp16 or manual_fp16 else tf.constant(True, dtype=tf.bool)
 
   # This is how the model was pre-trained.
-  (grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
+  # ensure global norm is a finite number
+  # to prevent clip_by_global_norm from having a hizzy fit.
+  (clipped_grads, _) = tf.clip_by_global_norm(
+      grads, clip_norm=1.0,
+      use_norm=tf.cond(
+          all_are_finite,
+          lambda: tf.global_norm(grads),
+          lambda: tf.constant(1.0)))
 
+  #train_op = optimizer.apply_gradients(
+  #    list(zip(grads, tvars)), global_step=global_step)
+  // Change 12 apply grads using the cliped grads
   train_op = optimizer.apply_gradients(
-      list(zip(grads, tvars)), global_step=global_step)
+          list(zip(clipped_grads, tvars)), global_step=global_step)
 
   # Normally the global step update is done inside of `apply_gradients`.
   # However, neither `AdamWeightDecayOptimizer` nor `LAMBOptimizer` do this.
