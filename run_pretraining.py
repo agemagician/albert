@@ -384,7 +384,8 @@ def input_fn_builder(input_files,
                      max_seq_length,
                      max_predictions_per_seq,
                      is_training,
-                     num_cpu_threads=4):
+                     num_cpu_threads=4,
+                     hvd=None):
   """Creates an `input_fn` closure to be passed to TPUEstimator."""
 
   def input_fn(params):
@@ -418,6 +419,7 @@ def input_fn_builder(input_files,
     # For eval, we want no shuffling and parallel reading doesn't matter.
     if is_training:
       d = tf.data.Dataset.from_tensor_slices(tf.constant(input_files))
+      if hvd is not None: d = d.shard(hvd.size(), hvd.rank())
       d = d.repeat()
       d = d.shuffle(buffer_size=len(input_files))
 
@@ -537,7 +539,8 @@ def main(_):
       use_one_hot_embeddings=FLAGS.use_tpu,
       optimizer=FLAGS.optimizer,
       poly_power=FLAGS.poly_power,
-      start_warmup_step=FLAGS.start_warmup_step)
+      start_warmup_step=FLAGS.start_warmup_step,
+      hvd=None if not FLAGS.horovod else hvd)
 
   // Change 6 Broadcast model weights from rank 0
   training_hooks = []
@@ -560,7 +563,8 @@ def main(_):
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
-        is_training=True)
+        is_training=True,
+        hvd)
     estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps, hooks=training_hooks)
 
   if FLAGS.do_eval and (not FLAGS.horovod or hvd.rank() == 0):
@@ -573,7 +577,8 @@ def main(_):
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
-        is_training=False)
+        is_training=False,
+        hvd=None if not FLAGS.horovod else hvd)
     best_perf = 0
     key_name = "masked_lm_accuracy"
     while global_step < FLAGS.num_train_steps:
