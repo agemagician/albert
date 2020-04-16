@@ -128,6 +128,7 @@ flags.DEFINE_float(
     "If >0, the ratio of masked ngrams to unmasked ngrams. Default 0,"
     "for offline masking")
 
+flags.DEFINE_bool("horovod", False, "Whether to use Horovod for multi-gpu runs")
 
 def model_fn_builder(albert_config, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
@@ -468,6 +469,12 @@ def _decode_record(record, name_to_features):
 
 
 def main(_):
+    
+  // Change 1 and 2
+  if FLAGS.horovod:
+    import horovod.tensorflow as hvd
+    hvd.init()
+    
   tf.logging.set_verbosity(tf.logging.INFO)
 
   if not FLAGS.do_train and not FLAGS.do_eval:
@@ -481,6 +488,10 @@ def main(_):
   for input_pattern in FLAGS.input_file.split(","):
     input_files.extend(tf.gfile.Glob(input_pattern))
 
+  // Change 4 make sure enough sharded for each node
+  if FLAGS.horovod and len(input_files) < hvd.size():
+      raise ValueError("Input Files must be sharded")
+        
   tf.logging.info("*** Input Files ***")
   for input_file in input_files:
     tf.logging.info("  %s" % input_file)
@@ -490,12 +501,25 @@ def main(_):
     tpu_cluster_resolver = contrib_cluster_resolver.TPUClusterResolver(
         FLAGS.tpu_name, zone=FLAGS.tpu_zone, project=FLAGS.gcp_project)
 
+  // Change 3 for saving checkpoints
   is_per_host = contrib_tpu.InputPipelineConfig.PER_HOST_V2
+  
+  // Change 4 make sure it sees only single gpu and add it to run config
+  config = tf.compat.v1.ConfigProto()
+  if FLAGS.horovod:
+    config.gpu_options.visible_device_list = str(hvd.local_rank())
+    if hvd.rank() == 0:
+      tf.compat.v1.logging.info("***** Configuaration *****")
+      for key in FLAGS.__flags.keys():
+          tf.compat.v1.logging.info('  {}: {}'.format(key, getattr(FLAGS, key)))
+      tf.compat.v1.logging.info("**************************")
+    
   run_config = contrib_tpu.RunConfig(
+      session_config=config,
       cluster=tpu_cluster_resolver,
       master=FLAGS.master,
       model_dir=FLAGS.output_dir,
-      save_checkpoints_steps=FLAGS.save_checkpoints_steps,
+      save_checkpoints_steps=FLAGS.save_checkpoints_steps if not FLAGS.horovod or hvd.rank() == 0 else None,
       keep_checkpoint_max=FLAGS.keep_checkpoint_max,
       tpu_config=contrib_tpu.TPUConfig(
           iterations_per_loop=FLAGS.iterations_per_loop,
@@ -514,6 +538,11 @@ def main(_):
       poly_power=FLAGS.poly_power,
       start_warmup_step=FLAGS.start_warmup_step)
 
+  // Change 6 Broadcast model weights from rank 0
+  training_hooks = []
+  if FLAGS.horovod and hvd.size() > 1:
+    training_hooks.append(hvd.BroadcastGlobalVariablesHook(0))
+    
   # If TPU is not available, this will fall back to normal Estimator on CPU
   # or GPU.
   estimator = contrib_tpu.TPUEstimator(
@@ -531,9 +560,9 @@ def main(_):
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
         is_training=True)
-    estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps)
+    estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps, hooks=training_hooks)
 
-  if FLAGS.do_eval:
+  if FLAGS.do_eval and (not FLAGS.horovod or hvd.rank() == 0):
     tf.logging.info("***** Running evaluation *****")
     tf.logging.info("  Batch size = %d", FLAGS.eval_batch_size)
     global_step = -1
