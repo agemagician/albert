@@ -133,7 +133,7 @@ flags.DEFINE_bool("horovod", False, "Whether to use Horovod for multi-gpu runs")
 def model_fn_builder(albert_config, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
                      use_one_hot_embeddings, optimizer, poly_power,
-                     start_warmup_step):
+                     start_warmup_step, hvd=None):
   """Returns `model_fn` closure for TPUEstimator."""
 
   def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
@@ -221,7 +221,8 @@ def model_fn_builder(albert_config, init_checkpoint, learning_rate,
     if mode == tf.estimator.ModeKeys.TRAIN:
       train_op = optimization.create_optimizer(
           total_loss, learning_rate, num_train_steps, num_warmup_steps,
-          use_tpu, optimizer, poly_power, start_warmup_step)
+          use_tpu, optimizer, poly_power, start_warmup_step,
+          hvd, FLAGS.use_fp16, FLAGS.manual_fp16)
 
       output_spec = contrib_tpu.TPUEstimatorSpec(
           mode=mode,
